@@ -9,6 +9,7 @@ java_library {
     defaults: ["qcom.fmradio_defaults"],
     installable: true,
     srcs: ["**/*.java"],
+    required: ["qcom.fmradio.xml"],
 }
 
 prebuilt_etc {

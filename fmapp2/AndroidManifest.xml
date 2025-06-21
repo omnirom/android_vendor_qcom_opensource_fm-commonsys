@@ -63,9 +63,6 @@
         android:theme="@style/FMTheme"
         android:name=".FMAdapterApp">
 
-        <uses-library android:name="qcom.fmradio"
-            android:required="true" />
-
         <activity android:icon="@mipmap/ic_launcher"
             android:name=".FMRadio"
             android:clearTaskOnLaunch="true"
