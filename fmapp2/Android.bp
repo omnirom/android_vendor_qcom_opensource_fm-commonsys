@@ -11,4 +11,8 @@ android_app {
     aaptflags: ["--legacy"],
     system_ext_specific: true,
     required: ["qcom.fmradio"],
+
+    uses_libs: [
+        "qcom.fmradio",
+    ],
 }
