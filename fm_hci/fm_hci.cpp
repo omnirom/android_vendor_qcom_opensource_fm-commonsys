@@ -41,11 +41,6 @@
 #include <condition_variable> // std::condition_variable
 #include <cstdlib>
 #include <thread>
-#include <android/binder_ibinder.h>
-#include <android/binder_manager.h>
-#include <android/binder_process.h>
-//#include <binder_auto_utils.h>
-#include <cassert>
 
 #include <utils/Log.h>
 #include <unistd.h>
@@ -57,17 +52,6 @@
 
 #include <hwbinder/ProcessState.h>
 
-#include <aidl/vendor/qti/hardware/fm/BnFmHci.h>
-#include <aidl/vendor/qti/hardware/fm/BnFmHciCallbacks.h>
-#include <aidl/vendor/qti/hardware/fm/IFmHci.h>
-
-#define ASSERT_LOG(condition, fmt, args...)                                 \
-  do {                                                                      \
-    if (!(condition)) {                                                     \
-      LOG_ALWAYS_FATAL("assertion '" #condition "' failed - " fmt, ##args); \
-    }                                                                       \
-  } while (false)
-
 using vendor::qti::hardware::fm::V1_0::IFmHci;
 using vendor::qti::hardware::fm::V1_0::IFmHciCallbacks;
 using vendor::qti::hardware::fm::V1_0::HciPacket;
@@ -78,19 +62,11 @@ using ::android::hardware::Void;
 using ::android::hardware::hidl_vec;
 using ::android::hardware::hidl_death_recipient;
 
-using ::aidl::vendor::qti::hardware::fm::BnFmHci;
-using fm_aidl = ::aidl::vendor::qti::hardware::fm::IFmHci;
-//using IBluetoothHci_1_1 = ::android::hardware::bluetooth::V1_1::IBluetoothHci;
-using AidlStatus = ::aidl::vendor::qti::hardware::fm::Status;
-
 static struct fm_hci_t hci;
 
 typedef std::unique_lock<std::mutex> Lock;
 static std::recursive_mutex mtx;
 android::sp<IFmHci> fmHci;
-std::shared_ptr<::aidl::vendor::qti::hardware::fm::IFmHci> fmAidlHci;
-::ndk::ScopedAIBinder_DeathRecipient aidl_death_recipient_;
-std::shared_ptr<::aidl::vendor::qti::hardware::fm::IFmHciCallbacks> aidl_callbacks_;
 
 static int enqueue_fm_rx_event(struct fm_event_header_t *hdr);
 static void dequeue_fm_rx_event();
@@ -106,9 +82,7 @@ static void cleanup_threads();
 static bool hci_initialize();
 static void hci_transmit(struct fm_command_header_t *hdr);
 static void hci_close();
-static void initialization_complete(bool is_hci_initialize);
 #define HCI_EV_HW_ERR_EVENT             0x1A
-
 
 void hal_service_died() {
     struct fm_event_header_t *temp = (struct fm_event_header_t *)
@@ -122,40 +96,6 @@ void hal_service_died() {
         ALOGE("%s: Memory Allocation failed for event buffer ",__func__);
     }
 }
-class AidlHciCallbacks : public ::aidl::vendor::qti::hardware::fm::BnFmHciCallbacks {
- public:
-
-  ::ndk::ScopedAStatus initializationComplete(AidlStatus status) {
-    if(status == AidlStatus::SUCCESS)
-    {
-        initialization_complete(true);
-    } else {
-        initialization_complete(false);
-    }
-    return ::ndk::ScopedAStatus::ok();
-  }
-
-  ::ndk::ScopedAStatus hciEventReceived(const std::vector<uint8_t>& event) override {
-    struct fm_event_header_t *temp = (struct fm_event_header_t *) malloc(event.size());
-    if (temp != nullptr) {
-        memcpy(temp, event.data(), event.size());
-        uint8_t evt = temp->evt_code;
-        ALOGI("%s: evt_code:  0x%x", __func__, evt);
-        enqueue_fm_rx_event(temp);
-        ALOGI("%s: evt_code:  0x%x done", __func__, evt);
-    } else {
-        ALOGE("%s: Memory Allocation failed for event buffer ",__func__);
-    }
-
-    return ::ndk::ScopedAStatus::ok();
-  }
-
- private:
-  IFmHciCallbacks* callback_ = nullptr;
-};
-
-static constexpr char kFmAidlHalServiceName[] =
-    "vendor.qti.hardware.fm.IFmHci/default";
 
 class FmHciDeathRecipient : public hidl_death_recipient {
     public:
@@ -350,7 +290,7 @@ static void dequeue_fm_tx_cmd()
 
     ALOGI("%s command credits %d ", __func__, hci.command_credits);
 
-    while (1)
+    while (1) 
     {
        if (hci.command_credits == 0) {
           return;
@@ -644,54 +584,6 @@ class FmHciCallbacks : public IFmHciCallbacks {
         }
 };
 
- bool start_aidl() {
-    ndk::SpAIBinder binder(AServiceManager_waitForService(kFmAidlHalServiceName));
-    fmAidlHci = fm_aidl::fromBinder(binder);
-    if (fmAidlHci != nullptr) {
-      ALOGE("Using the AIDL interface");
-      aidl_death_recipient_ =
-          ::ndk::ScopedAIBinder_DeathRecipient(AIBinder_DeathRecipient_new([](void* cookie) {
-            ALOGE("The Fm HAL service died. Dumping logs and crashing in 1 second.");
-            LOG_ALWAYS_FATAL("The Bluetooth HAL died.");
-          }));
-
-      auto death_link =
-          AIBinder_linkToDeath(fmAidlHci->asBinder().get(), aidl_death_recipient_.get(), NULL);
-
-       ASSERT_LOG(
-          death_link == STATUS_OK, "Unable to set the death recipient for the Bluetooth HAL");
-
-      hci.state = FM_RADIO_ENABLING;
-      aidl_callbacks_ = ::ndk::SharedRefBase::make<AidlHciCallbacks>();
-      fmAidlHci->initialize(aidl_callbacks_);
-    }
-    return true;
- }
-
- bool start_hidl() {
-    fmHci = IFmHci::getService();
-    if(fmHci == nullptr) {
-        ALOGE("FM hal service is not running");
-        return FM_HC_STATUS_NULL_POINTER;
-    }
-
-    auto death_link = fmHci->linkToDeath(fmHciDeathRecipient, 0);
-    if (!death_link.isOk()) {
-        ALOGE("%s: Unable to set the death recipient for the Fm HAL", __func__);
-        abort();
-    }
-    if (fmHci != nullptr) {
-    hci.state = FM_RADIO_ENABLING;
-    android::sp<IFmHciCallbacks> callbacks = new FmHciCallbacks();
-    auto hidl_daemon_status = fmHci->initialize(callbacks);
-    if(!hidl_daemon_status.isOk()) {
-        ALOGE("%s: HIDL daemon is dead", __func__);
-    }
-        return true;
-    } else {
-        return false;
-    }
- }
 /*******************************************************************************
 **
 ** Function         hci_initialize
@@ -709,15 +601,19 @@ static bool hci_initialize()
 {
     ALOGI("%s: acquiring mutex", __func__);
     std::lock_guard<std::recursive_mutex> lk(mtx);
-    if (AServiceManager_isDeclared(kFmAidlHalServiceName)) {
-      start_aidl();
+
+    if (fmHci != nullptr) {
+        hci.state = FM_RADIO_ENABLING;
+        android::sp<IFmHciCallbacks> callbacks = new FmHciCallbacks();
+        auto hidl_daemon_status = fmHci->initialize(callbacks);
+        if(!hidl_daemon_status.isOk()) {
+            ALOGE("%s: HIDL daemon is dead", __func__);
+        }
+        return true;
     } else {
-      start_hidl();
+        return false;
     }
-    return true;
-
 }
-
 
 /*******************************************************************************
 **
@@ -744,9 +640,6 @@ static void hci_transmit(struct fm_command_header_t *hdr) {
         if(!hidl_daemon_status.isOk()) {
             ALOGE("%s: send Command failed, HIDL daemon is dead", __func__);
         }
-    } else if( fmAidlHci != nullptr) {
-        data.setToExternal((uint8_t *)hdr, 3 + hdr->len);
-        auto hidl_daemon_status = fmAidlHci->sendHciCommand(data);
     } else {
         ALOGI("%s: fmHci is NULL", __func__);
     }
@@ -782,17 +675,6 @@ static void hci_close()
             ALOGE("%s: HIDL daemon is dead", __func__);
         }
         fmHci = nullptr;
-    } else if(fmAidlHci != nullptr) {
-        auto death_unlink =
-            AIBinder_unlinkToDeath(fmAidlHci->asBinder().get(), aidl_death_recipient_.get(), NULL);
-        if (death_unlink != STATUS_OK) {
-          ALOGE("Error unlinking death recipient from the Bluetooth HAL");
-        }
-        auto close_status = fmAidlHci->close();
-        if (!close_status.isOk()) {
-          ALOGE("Error calling close on the Bluetooth HAL");
-        }
-        fmAidlHci = nullptr;
     }
 }
 
@@ -823,6 +705,18 @@ int fm_hci_init(fm_hci_hal_t *hci_hal)
     if (!hci_hal || !hci_hal->hal) {
         ALOGE("NULL input argument");
         return FM_HC_STATUS_NULL_POINTER;
+    }
+
+    fmHci = IFmHci::getService();
+    if(fmHci == nullptr) {
+        ALOGE("FM hal service is not running");
+        return FM_HC_STATUS_NULL_POINTER;
+    }
+
+    auto death_link = fmHci->linkToDeath(fmHciDeathRecipient, 0);
+    if (!death_link.isOk()) {
+        ALOGE("%s: Unable to set the death recipient for the Fm HAL", __func__);
+        abort();
     }
 
     memset(&hci, 0, sizeof(struct fm_hci_t));
@@ -921,3 +815,4 @@ void fm_hci_close(void *p_hci)
 
     hci.state = FM_RADIO_DISABLED;
 }
+
