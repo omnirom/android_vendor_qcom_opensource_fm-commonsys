@@ -42,7 +42,7 @@ typedef enum {
     FM_HC_STATUS_NULL_POINTER,
 } fm_hc_status_t;
 
-static char *status_s[] = {
+const static char *status_s[] = {
     "Success",
     "Failed, generic error",
     "Not ready",
@@ -52,7 +52,7 @@ static char *status_s[] = {
     "NULL pointer dereference",
 };
 
-static inline char *fm_hci_status(int status) {
+const static inline char *fm_hci_status(int status) {
     return status_s[status];
 }
 
