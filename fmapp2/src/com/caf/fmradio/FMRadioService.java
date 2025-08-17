@@ -302,7 +302,7 @@ public class FMRadioService extends Service
       AudioManager audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
       String valueStr = audioManager.getParameters("isA2dpDeviceSupported");
       mA2dpDeviceSupportInHal = valueStr.contains("=true");
-      Log.d(LOGTAG, " is A2DP device Supported In HAL"+mA2dpDeviceSupportInHal);
+      Log.d(LOGTAG, " is A2DP device Supported In HAL: " + mA2dpDeviceSupportInHal);
 
       mUseAudioSession = SystemProperties.getBoolean("ro.vendor.fm.use_audio_session", false);
       if (mUseAudioSession) {
